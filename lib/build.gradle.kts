@@ -23,13 +23,13 @@ repositories {
 
 val event_store_client: String by project
 val ktor_version: String by project
-//val grpc_api: String by project
+val grpc_api: String by project
 
 dependencies {
     implementation(kotlin("stdlib"))
     api("com.eventstore:db-client-java:$event_store_client")
     implementation("io.ktor:ktor-server-core:$ktor_version")
-//    implementation("io.grpc:grpc-api:$grpc_api")
+    compileOnly("io.grpc:grpc-api:$grpc_api")
     testImplementation("io.ktor:ktor-server-test-host:$ktor_version")
     testImplementation(kotlin("test"))
 }

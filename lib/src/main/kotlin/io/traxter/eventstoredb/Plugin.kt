@@ -2,6 +2,8 @@ package io.traxter.eventstoredb
 
 import com.eventstore.dbclient.*
 import com.eventstore.dbclient.EventStoreDBConnectionString.parseOrThrow
+import io.grpc.Status
+import io.grpc.StatusRuntimeException
 import io.ktor.application.Application
 import io.ktor.application.ApplicationFeature
 import io.ktor.application.ApplicationStopPreparing
@@ -225,24 +227,24 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
 
                     override fun onError(subscription: PersistentSubscription?, throwable: Throwable) {
                         launch(context) {
-//                            val groupNotFound = (throwable as? StatusRuntimeException)?.status == Status.NOT_FOUND
-//                            if (groupNotFound && options.autoCreateStreamGroup) {
-//                                config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
-//                                persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings).await()
-//                                subscribeToPersistedStream(
-//                                    streamName,
-//                                    groupName,
-//                                    options,
-//                                    listener
-//                                )
-//                            } else if (options.reSubscribeOnDrop && subscription != null) {
-//                                subscribeToPersistedStream(
-//                                    streamName,
-//                                    groupName,
-//                                    options,
-//                                    listener
-//                                )
-//                            }
+                            val groupNotFound = (throwable as? StatusRuntimeException)?.status == Status.NOT_FOUND
+                            if (groupNotFound && options.autoCreateStreamGroup) {
+                                config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
+                                persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings).await()
+                                subscribeToPersistedStream(
+                                    streamName,
+                                    groupName,
+                                    options,
+                                    listener
+                                )
+                            } else if (options.reSubscribeOnDrop && subscription != null) {
+                                subscribeToPersistedStream(
+                                    streamName,
+                                    groupName,
+                                    options,
+                                    listener
+                                )
+                            }
                             config.persistedErrorListener(subscription, throwable)
                         }
                     }
