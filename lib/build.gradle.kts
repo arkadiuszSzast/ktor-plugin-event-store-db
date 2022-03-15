@@ -29,7 +29,7 @@ dependencies {
     implementation(kotlin("stdlib"))
     api("com.eventstore:db-client-java:$event_store_client")
     implementation("io.ktor:ktor-server-core:$ktor_version")
-    compileOnly("io.grpc:grpc-api:$grpc_api")
+    implementation("io.grpc:grpc-api:$grpc_api")
     testImplementation("io.ktor:ktor-server-test-host:$ktor_version")
     testImplementation(kotlin("test"))
 }
