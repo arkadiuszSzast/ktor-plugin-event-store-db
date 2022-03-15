@@ -9,7 +9,7 @@ data class PersistentSubscriptionOptions(
     val autoCreateStreamGroup: Boolean = true,
     val reSubscribeOnDrop: Boolean = true,
     val retryableExceptions: Set<KClass<Throwable>> = emptySet(),
-    val createNewGroupSettings: PersistentSubscriptionSettings = PersistentSubscriptionSettingsBuilder().build()
+    val createNewGroupSettings: PersistentSubscriptionSettings = PersistentSubscriptionSettingsBuilder().fromStart().resolveLinkTos().build()
 ) {
 
     fun bufferSize(size: Int) = this.copy(subscriptionOptions = subscriptionOptions.setBufferSize(size))
