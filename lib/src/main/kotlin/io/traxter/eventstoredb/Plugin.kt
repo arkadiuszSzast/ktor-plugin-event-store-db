@@ -227,7 +227,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
 
                     override fun onError(subscription: PersistentSubscription?, throwable: Throwable) {
                         launch(context) {
-                            val groupNotFound = (throwable as? StatusRuntimeException)?.status == Status.NOT_FOUND
+                            val groupNotFound = (throwable as? StatusRuntimeException)?.status?.code == Status.NOT_FOUND.code
                             if (groupNotFound && options.autoCreateStreamGroup) {
                                 config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
                                 persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings).await()
@@ -244,8 +244,9 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                                     options,
                                     listener
                                 )
+                            } else {
+                                config.persistedErrorListener(subscription, throwable)
                             }
-                            config.persistedErrorListener(subscription, throwable)
                         }
                     }
                 }
