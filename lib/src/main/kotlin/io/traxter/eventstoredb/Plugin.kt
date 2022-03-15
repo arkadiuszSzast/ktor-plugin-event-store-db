@@ -28,6 +28,7 @@ fun Application.EventStoreDB(config: EventStoreDB.Configuration.() -> Unit) =
     install(EventStoreDB, config)
 
 typealias EventListener = suspend ResolvedEvent.() -> Unit
+typealias PersistentEventListener = suspend (subscription: PersistentSubscription, event: ResolvedEvent) -> Unit
 typealias ErrorEventListener = suspend (subscription: Subscription?, throwable: Throwable) -> Unit
 typealias ErrorPersistedEventListener = suspend (subscription: PersistentSubscription?, throwable: Throwable) -> Unit
 
@@ -82,13 +83,13 @@ interface EventStoreDB : CoroutineScope {
         streamName: StreamName,
         groupName: StreamGroup,
         options: PersistentSubscriptionOptions,
-        listener: EventListener
+        listener: PersistentEventListener
     ): PersistentSubscription
 
     suspend fun subscribeToPersistedStream(
         streamName: StreamName,
         groupName: StreamGroup,
-        listener: EventListener
+        listener: PersistentEventListener
     ): PersistentSubscription
 
     suspend fun subscribeToAll(listener: EventListener): Subscription
@@ -150,7 +151,9 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     ): WriteResult =
         client.appendToStream(streamName, eventData).await()
 
-    override suspend fun deleteStream(streamName: StreamName): DeleteResult = client.deleteStream(streamName.name).await()
+    override suspend fun deleteStream(streamName: StreamName): DeleteResult =
+        client.deleteStream(streamName.name).await()
+
     override suspend fun deleteStream(streamName: StreamName, options: DeleteStreamOptions.() -> Unit): DeleteResult =
         client.deleteStream(streamName.name, DeleteStreamOptions.get().apply(options)).await()
 
@@ -193,7 +196,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
         streamName: StreamName,
         groupName: StreamGroup,
         options: PersistentSubscriptionOptions,
-        listener: EventListener
+        listener: PersistentEventListener
     ): PersistentSubscription {
         return subscriptionContext.let { context ->
             persistedClient.subscribe(
@@ -204,7 +207,10 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                     override fun onEvent(subscription: PersistentSubscription, event: ResolvedEvent) {
                         runCatching {
                             launch(context) {
-                                listener(event)
+                                listener(subscription, event)
+                                if (options.autoAcknowledge) {
+                                    subscription.ack(event)
+                                }
                             }
                         }.onFailure {
                             if (it::class in options.retryableExceptions) {
@@ -227,10 +233,12 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
 
                     override fun onError(subscription: PersistentSubscription?, throwable: Throwable) {
                         launch(context) {
-                            val groupNotFound = (throwable as? StatusRuntimeException)?.status?.code == Status.NOT_FOUND.code
+                            val groupNotFound =
+                                (throwable as? StatusRuntimeException)?.status?.code == Status.NOT_FOUND.code
                             if (groupNotFound && options.autoCreateStreamGroup) {
                                 config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
-                                persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings).await()
+                                persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings)
+                                    .await()
                                 subscribeToPersistedStream(
                                     streamName,
                                     groupName,
@@ -257,7 +265,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     override suspend fun subscribeToPersistedStream(
         streamName: StreamName,
         groupName: StreamGroup,
-        listener: EventListener
+        listener: PersistentEventListener
     ) = subscribeToPersistedStream(streamName, groupName, PersistentSubscriptionOptions(), listener)
 
     override suspend fun subscribeToAll(listener: EventListener): Subscription = subscribeToAll(

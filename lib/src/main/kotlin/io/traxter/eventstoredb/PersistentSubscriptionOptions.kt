@@ -6,6 +6,7 @@ import kotlin.reflect.KClass
 data class PersistentSubscriptionOptions(
     val subscriptionOptions: SubscribePersistentSubscriptionOptions = SubscribePersistentSubscriptionOptions.get(),
     val nackAction: NackAction = NackAction.Park,
+    val autoAcknowledge: Boolean = true,
     val autoCreateStreamGroup: Boolean = true,
     val reSubscribeOnDrop: Boolean = true,
     val retryableExceptions: Set<KClass<Throwable>> = emptySet(),
@@ -25,6 +26,8 @@ data class PersistentSubscriptionOptions(
     fun nackRetry() = this.copy(nackAction = NackAction.Retry)
     fun nackSkip() = this.copy(nackAction = NackAction.Skip)
     fun nackStop() = this.copy(nackAction = NackAction.Stop)
+    fun autoAcknowledge() = this.copy(autoAcknowledge = true)
+    fun notAutoAcknowledge() = this.copy(autoAcknowledge = false)
     fun retryOn(vararg exceptions: KClass<Throwable>) = this.copy(retryableExceptions = exceptions.toSet())
     fun createNewGroupSettings(settings: PersistentSubscriptionSettings) = this.copy(createNewGroupSettings = settings)
 }
