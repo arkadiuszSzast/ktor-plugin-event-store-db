@@ -1,25 +1,9 @@
 package io.traxter.eventstoredb
 
-import com.eventstore.dbclient.AppendToStreamOptions
-import com.eventstore.dbclient.ConnectionSettingsBuilder
-import com.eventstore.dbclient.DeleteResult
-import com.eventstore.dbclient.DeleteStreamOptions
-import com.eventstore.dbclient.EventData
-import com.eventstore.dbclient.EventStoreDBClient
-import com.eventstore.dbclient.EventStoreDBClientSettings
+import com.eventstore.dbclient.*
 import com.eventstore.dbclient.EventStoreDBConnectionString.parseOrThrow
-import com.eventstore.dbclient.Position
-import com.eventstore.dbclient.ReadAllOptions
-import com.eventstore.dbclient.ReadResult
-import com.eventstore.dbclient.ReadStreamOptions
-import com.eventstore.dbclient.ResolvedEvent
-import com.eventstore.dbclient.StreamRevision
-import com.eventstore.dbclient.SubscribeToAllOptions
-import com.eventstore.dbclient.SubscribeToStreamOptions
-import com.eventstore.dbclient.Subscription
-import com.eventstore.dbclient.SubscriptionFilter
-import com.eventstore.dbclient.SubscriptionListener
-import com.eventstore.dbclient.WriteResult
+import io.grpc.Status
+import io.grpc.StatusRuntimeException
 import io.ktor.application.Application
 import io.ktor.application.ApplicationFeature
 import io.ktor.application.ApplicationStopPreparing
@@ -45,6 +29,7 @@ fun Application.EventStoreDB(config: EventStoreDB.Configuration.() -> Unit) =
 
 typealias EventListener = suspend ResolvedEvent.() -> Unit
 typealias ErrorEventListener = suspend (subscription: Subscription?, throwable: Throwable) -> Unit
+typealias ErrorPersistedEventListener = suspend (subscription: PersistentSubscription?, throwable: Throwable) -> Unit
 
 interface EventStoreDB : CoroutineScope {
     data class Configuration(
@@ -54,6 +39,9 @@ interface EventStoreDB : CoroutineScope {
         var logger: Logger,
         var errorListener: ErrorEventListener = { subscription, throwable ->
             logger.error("Subscription[ ${subscription?.subscriptionId} ] failed due to due to ${throwable.message}")
+        },
+        var persistedErrorListener: ErrorPersistedEventListener = { subscription, throwable ->
+            logger.error("Persisted subscription[ ${subscription?.subscriptionId} ] failed due to due to ${throwable.message}")
         },
         var reSubscribeOnDrop: Boolean = true
     ) {
@@ -75,20 +63,33 @@ interface EventStoreDB : CoroutineScope {
         options: AppendToStreamOptions = AppendToStreamOptions.get()
     ): WriteResult
 
-    suspend fun readStream(streamName: String): ReadResult
-    suspend fun readStream(streamName: String, maxCount: Long): ReadResult
-    suspend fun readStream(streamName: String, options: ReadStreamOptions): ReadResult
-    suspend fun readStream(streamName: String, maxCount: Long, options: ReadStreamOptions): ReadResult
+    suspend fun readStream(streamName: StreamName): ReadResult
+    suspend fun readStream(streamName: StreamName, maxCount: Long): ReadResult
+    suspend fun readStream(streamName: StreamName, options: ReadStreamOptions): ReadResult
+    suspend fun readStream(streamName: StreamName, maxCount: Long, options: ReadStreamOptions): ReadResult
     suspend fun readAll(): ReadResult
     suspend fun readAll(maxCount: Long): ReadResult
     suspend fun readAll(options: ReadAllOptions): ReadResult
     suspend fun readAll(maxCount: Long, options: ReadAllOptions): ReadResult
-    suspend fun subscribeToStream(streamName: String, listener: EventListener): Subscription
+    suspend fun subscribeToStream(streamName: StreamName, listener: EventListener): Subscription
     suspend fun subscribeToStream(
-        streamName: String,
+        streamName: StreamName,
         options: SubscribeToStreamOptions,
         listener: EventListener
     ): Subscription
+
+    suspend fun subscribeToPersistedStream(
+        streamName: StreamName,
+        groupName: StreamGroup,
+        options: PersistentSubscriptionOptions,
+        listener: EventListener
+    ): PersistentSubscription
+
+    suspend fun subscribeToPersistedStream(
+        streamName: StreamName,
+        groupName: StreamGroup,
+        listener: EventListener
+    ): PersistentSubscription
 
     suspend fun subscribeToAll(listener: EventListener): Subscription
     suspend fun subscribeToAll(options: SubscribeToAllOptions, listener: EventListener): Subscription
@@ -96,8 +97,8 @@ interface EventStoreDB : CoroutineScope {
     suspend fun subscribeByStreamNameFiltered(regex: Regex, listener: EventListener): Subscription
     suspend fun subscribeByEventTypeFiltered(prefix: Prefix, listener: EventListener): Subscription
     suspend fun subscribeByEventTypeFiltered(regex: Regex, listener: EventListener): Subscription
-    suspend fun deleteStream(streamName: String): DeleteResult
-    suspend fun deleteStream(streamName: String, options: DeleteStreamOptions.() -> Unit): DeleteResult
+    suspend fun deleteStream(streamName: StreamName): DeleteResult
+    suspend fun deleteStream(streamName: StreamName, options: DeleteStreamOptions.() -> Unit): DeleteResult
 
     companion object Feature : ApplicationFeature<Application, Configuration, EventStoreDB> {
         override val key: AttributeKey<EventStoreDB> = AttributeKey("EventStoreDB")
@@ -130,6 +131,10 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
         ?.let { connectionString -> EventStoreDBClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBClient.create(config.eventStoreSettings)
 
+    private val persistedClient = config.connectionString
+        ?.let { connectionString -> EventStoreDBPersistentSubscriptionsClient.create(parseOrThrow(connectionString)) }
+        ?: EventStoreDBPersistentSubscriptionsClient.create(config.eventStoreSettings)
+
     override suspend fun appendToStream(
         streamName: String,
         eventType: String,
@@ -145,23 +150,23 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     ): WriteResult =
         client.appendToStream(streamName, eventData).await()
 
-    override suspend fun deleteStream(streamName: String): DeleteResult = client.deleteStream(streamName).await()
-    override suspend fun deleteStream(streamName: String, options: DeleteStreamOptions.() -> Unit): DeleteResult =
-        client.deleteStream(streamName, DeleteStreamOptions.get().apply(options)).await()
+    override suspend fun deleteStream(streamName: StreamName): DeleteResult = client.deleteStream(streamName.name).await()
+    override suspend fun deleteStream(streamName: StreamName, options: DeleteStreamOptions.() -> Unit): DeleteResult =
+        client.deleteStream(streamName.name, DeleteStreamOptions.get().apply(options)).await()
 
     override suspend fun subscribeToStream(
-        streamName: String,
+        streamName: StreamName,
         listener: EventListener
     ): Subscription = subscribeToStream(streamName, SubscribeToStreamOptions.get(), listener)
 
     override suspend fun subscribeToStream(
-        streamName: String,
+        streamName: StreamName,
         options: SubscribeToStreamOptions,
         listener: EventListener
     ): Subscription =
         subscriptionContext.let { context ->
             client.subscribeToStream(
-                streamName,
+                streamName.name,
                 object : SubscriptionListener() {
                     override fun onEvent(subscription: Subscription, event: ResolvedEvent) {
                         streamRevisionBySubscriptionId[subscription.subscriptionId] = event.originalEvent.streamRevision
@@ -183,6 +188,76 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 options
             ).await()
         }
+
+    override suspend fun subscribeToPersistedStream(
+        streamName: StreamName,
+        groupName: StreamGroup,
+        options: PersistentSubscriptionOptions,
+        listener: EventListener
+    ): PersistentSubscription {
+        return subscriptionContext.let { context ->
+            persistedClient.subscribe(
+                streamName.name,
+                groupName.name,
+                options.subscriptionOptions,
+                object : PersistentSubscriptionListener() {
+                    override fun onEvent(subscription: PersistentSubscription, event: ResolvedEvent) {
+                        runCatching {
+                            launch(context) {
+                                listener(event)
+                            }
+                        }.onFailure {
+                            if (it::class in options.retryableExceptions) {
+                                config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Exception is on retryable list, retrying. StackTrace: ${it.stackTraceToString()}")
+                                subscription.nack(
+                                    NackAction.Retry,
+                                    "retryable_exception_${it::class.simpleName}",
+                                    event
+                                )
+                            } else {
+                                config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
+                                subscription.nack(
+                                    options.nackAction,
+                                    "non_retryable_exception_${it::class.simpleName}",
+                                    event
+                                )
+                            }
+                        }.getOrThrow()
+                    }
+
+                    override fun onError(subscription: PersistentSubscription?, throwable: Throwable) {
+                        launch(context) {
+                            val groupNotFound = (throwable as? StatusRuntimeException)?.status == Status.NOT_FOUND
+                            if (groupNotFound && options.autoCreateStreamGroup) {
+                                config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
+                                persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings).await()
+                                subscribeToPersistedStream(
+                                    streamName,
+                                    groupName,
+                                    options,
+                                    listener
+                                )
+                            } else if (options.reSubscribeOnDrop && subscription != null) {
+                                subscribeToPersistedStream(
+                                    streamName,
+                                    groupName,
+                                    options,
+                                    listener
+                                )
+                            }
+                            config.persistedErrorListener(subscription, throwable)
+                        }
+                    }
+                }
+            )
+        }.await()
+    }
+
+    override suspend fun subscribeToPersistedStream(
+        streamName: StreamName,
+        groupName: StreamGroup,
+        listener: EventListener
+    ) = subscribeToPersistedStream(streamName, groupName, PersistentSubscriptionOptions(), listener)
 
     override suspend fun subscribeToAll(listener: EventListener): Subscription = subscribeToAll(
         SubscribeToAllOptions.get(), listener
@@ -232,17 +307,17 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
         SubscriptionFilter.newBuilder().withEventTypeRegularExpression(regex.pattern).build()
             .let { subscribeToAll(SubscribeToAllOptions.get().filter(it), listener) }
 
-    override suspend fun readStream(streamName: String): ReadResult =
-        client.readStream(streamName).await()
+    override suspend fun readStream(streamName: StreamName): ReadResult =
+        client.readStream(streamName.name).await()
 
-    override suspend fun readStream(streamName: String, maxCount: Long): ReadResult =
-        client.readStream(streamName, maxCount).await()
+    override suspend fun readStream(streamName: StreamName, maxCount: Long): ReadResult =
+        client.readStream(streamName.name, maxCount).await()
 
-    override suspend fun readStream(streamName: String, options: ReadStreamOptions): ReadResult =
-        client.readStream(streamName, options).await()
+    override suspend fun readStream(streamName: StreamName, options: ReadStreamOptions): ReadResult =
+        client.readStream(streamName.name, options).await()
 
-    override suspend fun readStream(streamName: String, maxCount: Long, options: ReadStreamOptions): ReadResult =
-        client.readStream(streamName, maxCount, options).await()
+    override suspend fun readStream(streamName: StreamName, maxCount: Long, options: ReadStreamOptions): ReadResult =
+        client.readStream(streamName.name, maxCount, options).await()
 
     override suspend fun readAll(): ReadResult = client.readAll().await()
     override suspend fun readAll(maxCount: Long): ReadResult = client.readAll(maxCount).await()

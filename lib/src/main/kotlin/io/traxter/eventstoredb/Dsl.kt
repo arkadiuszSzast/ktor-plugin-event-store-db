@@ -51,7 +51,7 @@ class StreamsSubscription(
 class Filter(private val options: SubscribeToAllOptions, private val client: EventStoreDB) {
 
     fun eventType(config: EventType.() -> Unit) = config(EventType(options, client))
-    fun streamName(config: StreamName.() -> Unit) = config(StreamName(options, client))
+    fun streamName(config: StreamNameFilter.() -> Unit) = config(StreamNameFilter(options, client))
 }
 
 class EventType(private val options: SubscribeToAllOptions, private val client: EventStoreDB) {
@@ -83,7 +83,7 @@ class EventType(private val options: SubscribeToAllOptions, private val client: 
         }
 }
 
-class StreamName(private val options: SubscribeToAllOptions, private val client: EventStoreDB) {
+class StreamNameFilter(private val options: SubscribeToAllOptions, private val client: EventStoreDB) {
     fun CoroutineScope.prefixed(prefix: String, listener: EventListener): Job =
         launch {
             client.subscribeToAll(
@@ -112,7 +112,7 @@ class StreamName(private val options: SubscribeToAllOptions, private val client:
 }
 
 class StreamSubscription(
-    private val streamName: String,
+    private val streamName: StreamName,
     private val client: EventStoreDB,
     private val options: SubscribeToStreamOptions = SubscribeToStreamOptions.get(),
 ) {

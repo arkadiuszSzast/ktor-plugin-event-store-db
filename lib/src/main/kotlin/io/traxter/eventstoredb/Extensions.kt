@@ -15,7 +15,7 @@ fun Route.streams(context: EventStoreDB.() -> Unit) =
 fun EventStoreDB.subscribe(config: StreamsSubscription.() -> Unit) =
     config(StreamsSubscription(this))
 
-fun EventStoreDB.subscribe(streamName: String, config: StreamSubscription.() -> Unit) =
+fun EventStoreDB.subscribe(streamName: StreamName, config: StreamSubscription.() -> Unit) =
     config(StreamSubscription(streamName, this))
 
 inline fun <reified T> RecordedEvent.getEventDataAs(): T =
