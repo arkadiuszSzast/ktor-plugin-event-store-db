@@ -11,14 +11,8 @@ import io.ktor.application.EventDefinition
 import io.ktor.application.install
 import io.ktor.application.log
 import io.ktor.util.AttributeKey
-import kotlinx.coroutines.CompletableJob
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.ExecutorCoroutineDispatcher
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.newSingleThreadContext
 import org.slf4j.Logger
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -205,55 +199,63 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 options.subscriptionOptions,
                 object : PersistentSubscriptionListener() {
                     override fun onEvent(subscription: PersistentSubscription, event: ResolvedEvent) {
-                        runCatching {
-                            launch(context) {
-                                listener(subscription, event)
-                                if (options.autoAcknowledge) {
-                                    subscription.ack(event)
-                                }
+                        launch(context) {
+                            supervisorScope {
+                                runCatching {
+                                    listener(subscription, event)
+                                    if (options.autoAcknowledge) {
+                                        subscription.ack(event)
+                                    }
+                                }.onFailure {
+                                    if (it::class in options.retryableExceptions) {
+                                        config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Exception is on retryable list, retrying. StackTrace: ${it.stackTraceToString()}")
+                                        subscription.nack(
+                                            NackAction.Retry,
+                                            "retryable_exception_${it::class.simpleName}",
+                                            event
+                                        )
+                                    } else {
+                                        config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
+                                        subscription.nack(
+                                            options.nackAction,
+                                            "non_retryable_exception_${it::class.simpleName}",
+                                            event
+                                        )
+                                    }
+                                }.getOrThrow()
                             }
-                        }.onFailure {
-                            if (it::class in options.retryableExceptions) {
-                                config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Exception is on retryable list, retrying. StackTrace: ${it.stackTraceToString()}")
-                                subscription.nack(
-                                    NackAction.Retry,
-                                    "retryable_exception_${it::class.simpleName}",
-                                    event
-                                )
-                            } else {
-                                config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
-                                subscription.nack(
-                                    options.nackAction,
-                                    "non_retryable_exception_${it::class.simpleName}",
-                                    event
-                                )
-                            }
-                        }.getOrThrow()
+                        }
                     }
 
                     override fun onError(subscription: PersistentSubscription?, throwable: Throwable) {
                         launch(context) {
-                            val groupNotFound =
-                                (throwable as? StatusRuntimeException)?.status?.code == Status.NOT_FOUND.code
-                            if (groupNotFound && options.autoCreateStreamGroup) {
-                                config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
-                                persistedClient.create(streamName.name, groupName.name, options.createNewGroupSettings)
-                                    .await()
-                                subscribeToPersistedStream(
-                                    streamName,
-                                    groupName,
-                                    options,
-                                    listener
-                                )
-                            } else if (options.reSubscribeOnDrop && subscription != null) {
-                                subscribeToPersistedStream(
-                                    streamName,
-                                    groupName,
-                                    options,
-                                    listener
-                                )
-                            } else {
-                                config.persistedErrorListener(subscription, throwable)
+                            supervisorScope {
+                                val groupNotFound =
+                                    (throwable as? StatusRuntimeException)?.status?.code == Status.NOT_FOUND.code
+                                if (groupNotFound && options.autoCreateStreamGroup) {
+                                    config.logger.warn("Stream group $groupName not found. AutoCreateStreamGroup is ON. Trying to create the group.")
+                                    persistedClient.create(
+                                        streamName.name,
+                                        groupName.name,
+                                        options.createNewGroupSettings
+                                    )
+                                        .await()
+                                    subscribeToPersistedStream(
+                                        streamName,
+                                        groupName,
+                                        options,
+                                        listener
+                                    )
+                                } else if (options.reSubscribeOnDrop && subscription != null) {
+                                    subscribeToPersistedStream(
+                                        streamName,
+                                        groupName,
+                                        options,
+                                        listener
+                                    )
+                                } else {
+                                    config.persistedErrorListener(subscription, throwable)
+                                }
                             }
                         }
                     }
