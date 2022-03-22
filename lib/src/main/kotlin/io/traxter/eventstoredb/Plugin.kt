@@ -199,31 +199,29 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 options.subscriptionOptions,
                 object : PersistentSubscriptionListener() {
                     override fun onEvent(subscription: PersistentSubscription, event: ResolvedEvent) {
-                        launch(context) {
-                            supervisorScope {
-                                runCatching {
-                                    listener(subscription, event)
-                                    if (options.autoAcknowledge) {
-                                        subscription.ack(event)
-                                    }
-                                }.onFailure {
-                                    if (it::class in options.retryableExceptions) {
-                                        config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Exception is on retryable list, retrying. StackTrace: ${it.stackTraceToString()}")
-                                        subscription.nack(
-                                            NackAction.Retry,
-                                            "retryable_exception_${it::class.simpleName}",
-                                            event
-                                        )
-                                    } else {
-                                        config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
-                                        subscription.nack(
-                                            options.nackAction,
-                                            "non_retryable_exception_${it::class.simpleName}",
-                                            event
-                                        )
-                                    }
-                                }.getOrThrow()
-                            }
+                        launch(context + SupervisorJob()) {
+                            runCatching {
+                                listener(subscription, event)
+                                if (options.autoAcknowledge) {
+                                    subscription.ack(event)
+                                }
+                            }.onFailure {
+                                if (it::class in options.retryableExceptions) {
+                                    config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Exception is on retryable list, retrying. StackTrace: ${it.stackTraceToString()}")
+                                    subscription.nack(
+                                        NackAction.Retry,
+                                        "retryable_exception_${it::class.simpleName}",
+                                        event
+                                    )
+                                } else {
+                                    config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
+                                    subscription.nack(
+                                        options.nackAction,
+                                        "non_retryable_exception_${it::class.simpleName}",
+                                        event
+                                    )
+                                }
+                            }.getOrThrow()
                         }
                     }
 
