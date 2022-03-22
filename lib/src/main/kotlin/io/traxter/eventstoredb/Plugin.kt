@@ -203,7 +203,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 options.subscriptionOptions,
                 object : PersistentSubscriptionListener() {
                     override fun onEvent(subscription: PersistentSubscription, event: ResolvedEvent) {
-                        launch(SupervisorJob(context.job)) {
+                        launch(context + SupervisorJob()) {
                             runCatching {
                                 listener(subscription, event)
                                 if (options.autoAcknowledge) {
@@ -230,7 +230,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                     }
 
                     override fun onError(subscription: PersistentSubscription?, throwable: Throwable) {
-                        launch(context) {
+                        launch(context + SupervisorJob()) {
                             supervisorScope {
                                 val groupNotFound =
                                     (throwable as? StatusRuntimeException)?.status?.code == Status.NOT_FOUND.code
@@ -240,8 +240,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                                         streamName.name,
                                         groupName.name,
                                         options.createNewGroupSettings
-                                    )
-                                        .await()
+                                    ).await()
                                     subscribeToPersistedStream(
                                         streamName,
                                         groupName,
