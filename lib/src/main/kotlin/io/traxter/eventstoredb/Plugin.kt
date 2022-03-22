@@ -111,6 +111,10 @@ interface EventStoreDB : CoroutineScope {
             return plugin
         }
     }
+
+    val persistedClient: EventStoreDBPersistentSubscriptionsClient
+    val subscriptionContext: ExecutorCoroutineDispatcher
+    val client: EventStoreDBClient
 }
 
 internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : EventStoreDB {
@@ -122,11 +126,11 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     private val streamRevisionBySubscriptionId = ConcurrentHashMap<String, StreamRevision>()
     private val positionBySubscriptionId = ConcurrentHashMap<String, Position>()
 
-    private val client = config.connectionString
+    override val client = config.connectionString
         ?.let { connectionString -> EventStoreDBClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBClient.create(config.eventStoreSettings)
 
-    val persistedClient = config.connectionString
+    override val persistedClient = config.connectionString
         ?.let { connectionString -> EventStoreDBPersistentSubscriptionsClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBPersistentSubscriptionsClient.create(config.eventStoreSettings)
 
@@ -340,7 +344,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     private val subscriptionContextCounter = AtomicInteger(0)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val subscriptionContext: ExecutorCoroutineDispatcher
+    override val subscriptionContext: ExecutorCoroutineDispatcher
         get() =
             newSingleThreadContext("EventStoreDB-subscription-context-${subscriptionContextCounter.incrementAndGet()}")
 }
