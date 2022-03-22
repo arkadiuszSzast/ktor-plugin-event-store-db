@@ -126,7 +126,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
         ?.let { connectionString -> EventStoreDBClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBClient.create(config.eventStoreSettings)
 
-    private val persistedClient = config.connectionString
+    val persistedClient = config.connectionString
         ?.let { connectionString -> EventStoreDBPersistentSubscriptionsClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBPersistentSubscriptionsClient.create(config.eventStoreSettings)
 
@@ -199,7 +199,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 options.subscriptionOptions,
                 object : PersistentSubscriptionListener() {
                     override fun onEvent(subscription: PersistentSubscription, event: ResolvedEvent) {
-                        launch(context + SupervisorJob()) {
+                        launch(SupervisorJob(context.job)) {
                             runCatching {
                                 listener(subscription, event)
                                 if (options.autoAcknowledge) {
@@ -340,7 +340,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     private val subscriptionContextCounter = AtomicInteger(0)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val subscriptionContext: ExecutorCoroutineDispatcher
+    val subscriptionContext: ExecutorCoroutineDispatcher
         get() =
             newSingleThreadContext("EventStoreDB-subscription-context-${subscriptionContextCounter.incrementAndGet()}")
 }
