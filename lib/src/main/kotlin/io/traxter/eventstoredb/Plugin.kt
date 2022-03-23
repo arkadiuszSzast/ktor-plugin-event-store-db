@@ -207,23 +207,23 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                                 if (options.autoAcknowledge) {
                                     subscription.ack(event)
                                 }
-                            }.onFailure {
+                            }.onFailure { throwable ->
                                 val eventId = event.originalEvent.eventId
                                 val retryCount = retriesByEventId[eventId] ?: 0
 
-                                if (it::class in options.retryableExceptions && retryCount < options.maxRetries) {
-                                    config.logger.error("Error when processing event with id: ${eventId}. Exception is on retryable list, retrying [${retryCount + 1}/${options.maxRetries}]. StackTrace: ${it.stackTraceToString()}")
+                                if (options.retryableExceptions.any { it.isInstance(throwable) }&& retryCount < options.maxRetries) {
+                                    config.logger.error("Error when processing event with id: ${eventId}. Exception is on retryable list, retrying [${retryCount + 1}/${options.maxRetries}]. StackTrace: ${throwable.stackTraceToString()}")
                                     subscription.nack(
                                         NackAction.Retry,
-                                        "retryable_exception_${it::class.simpleName}",
+                                        "retryable_exception_${throwable::class.simpleName}",
                                         event
                                     )
                                     retriesByEventId[eventId] = retryCount + 1
                                 } else {
-                                    config.logger.error("Error when processing event with id: ${eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
+                                    config.logger.error("Error when processing event with id: ${eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${throwable.stackTraceToString()}")
                                     subscription.nack(
                                         options.nackAction,
-                                        "non_retryable_exception_${it::class.simpleName}",
+                                        "non_retryable_exception_${throwable::class.simpleName}",
                                         event
                                     )
                                     retriesByEventId.remove(eventId)
