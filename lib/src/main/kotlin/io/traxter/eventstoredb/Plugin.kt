@@ -14,6 +14,7 @@ import io.ktor.util.AttributeKey
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import org.slf4j.Logger
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
@@ -111,10 +112,6 @@ interface EventStoreDB : CoroutineScope {
             return plugin
         }
     }
-
-    val persistedClient: EventStoreDBPersistentSubscriptionsClient
-    val subscriptionContext: ExecutorCoroutineDispatcher
-    val client: EventStoreDBClient
 }
 
 internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : EventStoreDB {
@@ -125,12 +122,13 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
 
     private val streamRevisionBySubscriptionId = ConcurrentHashMap<String, StreamRevision>()
     private val positionBySubscriptionId = ConcurrentHashMap<String, Position>()
+    private val retriesByEventId = ConcurrentHashMap<UUID, Long>()
 
-    override val client = config.connectionString
+    private val client = config.connectionString
         ?.let { connectionString -> EventStoreDBClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBClient.create(config.eventStoreSettings)
 
-    override val persistedClient = config.connectionString
+    private val persistedClient = config.connectionString
         ?.let { connectionString -> EventStoreDBPersistentSubscriptionsClient.create(parseOrThrow(connectionString)) }
         ?: EventStoreDBPersistentSubscriptionsClient.create(config.eventStoreSettings)
 
@@ -171,11 +169,11 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 object : SubscriptionListener() {
                     override fun onEvent(subscription: Subscription, event: ResolvedEvent) {
                         streamRevisionBySubscriptionId[subscription.subscriptionId] = event.originalEvent.streamRevision
-                        launch(context) { listener(event) }
+                        launch(context + SupervisorJob()) { listener(event) }
                     }
 
                     override fun onError(subscription: Subscription?, throwable: Throwable) {
-                        launch(context) {
+                        launch(context + SupervisorJob()) {
                             if (config.reSubscribeOnDrop && subscription != null)
                                 subscribeToStream(
                                     streamName,
@@ -210,20 +208,25 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                                     subscription.ack(event)
                                 }
                             }.onFailure {
-                                if (it::class in options.retryableExceptions) {
-                                    config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Exception is on retryable list, retrying. StackTrace: ${it.stackTraceToString()}")
+                                val eventId = event.originalEvent.eventId
+                                val retryCount = retriesByEventId[eventId] ?: 0
+
+                                if (it::class in options.retryableExceptions && retryCount < options.maxRetries) {
+                                    config.logger.error("Error when processing event with id: ${eventId}. Exception is on retryable list, retrying [${retryCount + 1}/${options.maxRetries}]. StackTrace: ${it.stackTraceToString()}")
                                     subscription.nack(
                                         NackAction.Retry,
                                         "retryable_exception_${it::class.simpleName}",
                                         event
                                     )
+                                    retriesByEventId[eventId] = retryCount + 1
                                 } else {
-                                    config.logger.error("Error when processing event with id: ${event.originalEvent.eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
+                                    config.logger.error("Error when processing event with id: ${eventId}. Nack strategy is ${options.nackAction.name}. Exception: ${it.stackTraceToString()}")
                                     subscription.nack(
                                         options.nackAction,
                                         "non_retryable_exception_${it::class.simpleName}",
                                         event
                                     )
+                                    retriesByEventId.remove(eventId)
                                 }
                             }.getOrThrow()
                         }
@@ -284,11 +287,11 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
                 object : SubscriptionListener() {
                     override fun onEvent(subscription: Subscription, event: ResolvedEvent) {
                         positionBySubscriptionId[subscription.subscriptionId] = event.originalEvent.position
-                        launch(context) { listener(event) }
+                        launch(context + SupervisorJob()) { listener(event) }
                     }
 
                     override fun onError(subscription: Subscription?, throwable: Throwable) {
-                        launch(context) {
+                        launch(context + SupervisorJob()) {
                             if (config.reSubscribeOnDrop && subscription != null)
                                 subscribeToAll(
                                     options.fromPosition(positionBySubscriptionId[subscription.subscriptionId]),
@@ -343,7 +346,7 @@ internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration
     private val subscriptionContextCounter = AtomicInteger(0)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    override val subscriptionContext: ExecutorCoroutineDispatcher
+    private val subscriptionContext: ExecutorCoroutineDispatcher
         get() =
             newSingleThreadContext("EventStoreDB-subscription-context-${subscriptionContextCounter.incrementAndGet()}")
 }
