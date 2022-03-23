@@ -9,7 +9,7 @@ data class PersistentSubscriptionOptions(
     val autoAcknowledge: Boolean = true,
     val autoCreateStreamGroup: Boolean = true,
     val reSubscribeOnDrop: Boolean = true,
-    val retryableExceptions: Set<KClass<Throwable>> = emptySet(),
+    val retryableExceptions: Set<KClass<out Throwable>> = emptySet(),
     val maxRetries: Long = 5,
     val createNewGroupSettings: PersistentSubscriptionSettings = PersistentSubscriptionSettingsBuilder().fromStart().resolveLinkTos().build()
 ) {
@@ -29,7 +29,7 @@ data class PersistentSubscriptionOptions(
     fun nackStop() = this.copy(nackAction = NackAction.Stop)
     fun autoAcknowledge() = this.copy(autoAcknowledge = true)
     fun notAutoAcknowledge() = this.copy(autoAcknowledge = false)
-    fun retryOn(vararg exceptions: KClass<Throwable>) = this.copy(retryableExceptions = exceptions.toSet())
+    fun retryOn(vararg exceptions: KClass<out Throwable>) = this.copy(retryableExceptions = exceptions.toSet())
     fun maxRetries(max: Long) = this.copy(maxRetries = max)
     fun createNewGroupSettings(settings: PersistentSubscriptionSettings) = this.copy(createNewGroupSettings = settings)
 }
