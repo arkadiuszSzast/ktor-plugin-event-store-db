@@ -114,7 +114,7 @@ interface EventStoreDB : CoroutineScope {
     }
 }
 
-internal class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : EventStoreDB {
+class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : EventStoreDB {
     @OptIn(ExperimentalCoroutinesApi::class)
     private val parent: CompletableJob = Job()
     override val coroutineContext: CoroutineContext
