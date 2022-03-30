@@ -59,6 +59,7 @@ interface EventStoreDB : CoroutineScope {
         options: AppendToStreamOptions = AppendToStreamOptions.get()
     ): WriteResult
 
+    suspend fun readByCorrelationId(id: UUID): ReadResult
     suspend fun readStream(streamName: StreamName): ReadResult
     suspend fun readStream(streamName: StreamName, maxCount: Long): ReadResult
     suspend fun readStream(streamName: StreamName, options: ReadStreamOptions): ReadResult
@@ -67,6 +68,7 @@ interface EventStoreDB : CoroutineScope {
     suspend fun readAll(maxCount: Long): ReadResult
     suspend fun readAll(options: ReadAllOptions): ReadResult
     suspend fun readAll(maxCount: Long, options: ReadAllOptions): ReadResult
+    suspend fun subscribeByCorrelationId(id: UUID, listener: EventListener): Subscription
     suspend fun subscribeToStream(streamName: StreamName, listener: EventListener): Subscription
     suspend fun subscribeToStream(
         streamName: StreamName,
@@ -147,6 +149,9 @@ class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : Event
     ): WriteResult =
         client.appendToStream(streamName, eventData).await()
 
+    override suspend fun readByCorrelationId(id: UUID) =
+        readStream(StreamName("\$bc-$id"), ReadStreamOptions.get().resolveLinkTos())
+
     override suspend fun deleteStream(streamName: StreamName): DeleteResult =
         client.deleteStream(streamName.name).await()
 
@@ -211,7 +216,7 @@ class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : Event
                                 val eventId = event.originalEvent.eventId
                                 val retryCount = retriesByEventId[eventId] ?: 0
 
-                                if (options.retryableExceptions.any { it.isInstance(throwable) }&& retryCount < options.maxRetries) {
+                                if (options.retryableExceptions.any { it.isInstance(throwable) } && retryCount < options.maxRetries) {
                                     config.logger.error("Error when processing event with id: ${eventId}. Exception is on retryable list, retrying [${retryCount + 1}/${options.maxRetries}]. StackTrace: ${throwable.stackTraceToString()}")
                                     subscription.nack(
                                         NackAction.Retry,
@@ -339,6 +344,9 @@ class EventStoreDbPlugin(private val config: EventStoreDB.Configuration) : Event
     override suspend fun readAll(options: ReadAllOptions): ReadResult = client.readAll(options).await()
     override suspend fun readAll(maxCount: Long, options: ReadAllOptions): ReadResult =
         client.readAll(maxCount, options).await()
+
+    override suspend fun subscribeByCorrelationId(id: UUID, listener: EventListener) =
+        subscribeToStream(StreamName("\$bc-$id"), SubscribeToStreamOptions.get().resolveLinkTos(), listener)
 
     fun shutdown() =
         parent.complete().also { client.shutdown() }
